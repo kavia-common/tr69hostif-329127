@@ -83,6 +83,7 @@
 #include "hostIf_utils.h"
 #include "hostIf_updateHandler.h"
 #include "XrdkCentralComBSStore.h"
+#include "XrdkCentralComRFCStore.h"
 
 /** @defgroup TR_069_DEVICE_TIME_API TR-069 Device.Time object API.
  *  @ingroup TR_069_API
@@ -140,6 +141,7 @@ class hostIf_Time {
     static  GHashTable  *m_notifyHash;
 
     static XBSStore *m_bsStore;
+    static XRFCStore *m_rfcStore;
 
     int dev_id;
 

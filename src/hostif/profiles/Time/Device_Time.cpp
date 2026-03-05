@@ -55,6 +55,7 @@ GHashTable* hostIf_Time::ifHash = NULL;
 GMutex hostIf_Time::m_mutex;
 GHashTable* hostIf_Time::m_notifyHash = NULL;
 XBSStore* hostIf_Time::m_bsStore;
+XRFCStore* hostIf_Time::m_rfcStore;
 
 /****************************************************************************************************************************************************/
 // Device.DeviceInfo Profile. Getters:
@@ -69,6 +70,10 @@ hostIf_Time::hostIf_Time(int dev_id):
     backupCurrentLocalTime[0]='\0';
     backupCurrentUTCTime[0]='\0';
     m_bsStore = XBSStore::getInstance();
+
+    // Initialize the TR-181 persistent store used across the project for RFC/TR-181 values.
+    // This store persists values to the file configured by /etc/rfc.properties (TR181_STORE_FILENAME).
+    m_rfcStore = XRFCStore::getInstance();
 }
 
 hostIf_Time* hostIf_Time::getInstance(int dev_id)
@@ -166,9 +171,45 @@ hostIf_Time::~hostIf_Time()
 
 int hostIf_Time::get_Device_Time_LocalTimeZone(HOSTIF_MsgData_t *stMsgData, bool *pChanged )
 {
+    // If the parameter was previously set via TR-069/WebPA and persisted, return the persisted value.
+    // This ensures the set value survives reboot (TR-181 store persistence).
+    if(m_rfcStore)
+    {
+        HOSTIF_MsgData_t storeMsg;
+        memset(&storeMsg, 0, sizeof(storeMsg));
+
+        // Query the store by using the same TR-181 parameter name as the key.
+        // XRFCStore::getValue will also fallback to rfcdefaults if present.
+        strncpy(storeMsg.paramName, stMsgData->paramName, sizeof(storeMsg.paramName) - 1);
+        storeMsg.paramName[sizeof(storeMsg.paramName) - 1] = '\0';
+
+        // If there's an explicit value in the store, use it.
+        // NOTE: XRFCStore returns fcInternalError if not found and no default exists.
+        faultCode_t fc = m_rfcStore->getValue(&storeMsg);
+        if(fc == fcNoFault && storeMsg.paramValue[0] != '\0')
+        {
+            if(bCalledLocalTimeZone && pChanged && strncmp(storeMsg.paramValue, backupLocalTimeZone, _BUF_LEN_64))
+            {
+                *pChanged = true;
+            }
+
+            bCalledLocalTimeZone = true;
+
+            strncpy(stMsgData->paramValue, storeMsg.paramValue, sizeof(stMsgData->paramValue) - 1);
+            stMsgData->paramValue[sizeof(stMsgData->paramValue) - 1] = '\0';
+
+            strncpy(backupLocalTimeZone, stMsgData->paramValue, sizeof(backupLocalTimeZone) - 1);
+            backupLocalTimeZone[sizeof(backupLocalTimeZone) - 1] = '\0';
+
+            stMsgData->paramtype = hostIf_StringType;
+            stMsgData->paramLen = strlen(stMsgData->paramValue);
+            return OK;
+        }
+    }
+
+    // Fall back to non-persistent, runtime-derived timezone (original behavior).
     struct timeval time_now;
     struct tm *newtime = NULL;
-    
 
     char tmp[_BUF_LEN_64];
 
@@ -296,6 +337,35 @@ int hostIf_Time::set_Device_Time_NTPServer5(HOSTIF_MsgData_t* stMsgData)
 }
 int hostIf_Time::set_Device_Time_LocalTimeZone(HOSTIF_MsgData_t* stMsgData)
 {
+    if(!stMsgData)
+    {
+        return NOK;
+    }
+
+    if(!m_rfcStore)
+    {
+        // If the store isn't available, we can't satisfy the persistence requirement.
+        RDK_LOG(RDK_LOG_ERROR, LOG_TR69HOSTIF, "%s: XRFCStore not initialized, cannot persist %s\n",
+                __FUNCTION__, stMsgData->paramName);
+        return NOK;
+    }
+
+    faultCode_t fc = m_rfcStore->setValue(stMsgData);
+    if(fc == fcNoFault)
+    {
+        // Keep backup in sync so change notifications behave consistently.
+        const char* v = stMsgData->paramValue;
+        if(v)
+        {
+            strncpy(backupLocalTimeZone, v, sizeof(backupLocalTimeZone) - 1);
+            backupLocalTimeZone[sizeof(backupLocalTimeZone) - 1] = '\0';
+            bCalledLocalTimeZone = true;
+        }
+        return OK;
+    }
+
+    RDK_LOG(RDK_LOG_ERROR, LOG_TR69HOSTIF, "%s: Failed to persist %s (faultCode=%d)\n",
+            __FUNCTION__, stMsgData->paramName, (int)fc);
     return NOK;
 }
 

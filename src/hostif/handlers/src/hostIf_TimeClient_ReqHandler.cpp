@@ -127,6 +127,11 @@ int TimeClientReqHandler::handleSetMsg(HOSTIF_MsgData_t *stMsgData)
         {
             ret = pIface->set_Device_Time_Enable(stMsgData);
         }
+        else if (strcasecmp(stMsgData->paramName,"Device.Time.LocalTimeZone") == 0)
+        {
+            // Persist using TR-181 store so it survives reboot.
+            ret = pIface->set_Device_Time_LocalTimeZone(stMsgData);
+        }
         else
         {
            RDK_LOG(RDK_LOG_TRACE1,LOG_TR69HOSTIF,"[%s:%s:%d] parameter : \'%s\' Not handled \n", __FUNCTION__, __FILE__, __LINE__, stMsgData->paramName);
